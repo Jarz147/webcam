@@ -2,110 +2,146 @@
 <html lang="id">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Object Tracking Crosshair</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Industrial Part Counter</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
-        body { margin: 0; background: #000; color: white; font-family: sans-serif; overflow: hidden; }
+        body { 
+            margin: 0; background: #111; color: #00e5ff; 
+            font-family: 'Segoe UI', Roboto, sans-serif; overflow: hidden; 
+        }
         #video-container { position: relative; width: 100vw; height: 100vh; }
         video, canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
-        .ui-layer { position: absolute; bottom: 20px; width: 100%; text-align: center; z-index: 10; }
-        .target-info { background: rgba(255, 0, 0, 0.6); padding: 10px 20px; border-radius: 5px; display: none; }
+        
+        /* HUD Style */
+        .hud-panel {
+            position: absolute; top: 20px; left: 20px;
+            background: rgba(0, 20, 30, 0.8);
+            border-left: 4px solid #00e5ff;
+            padding: 15px 25px; z-index: 100;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+        .hud-label { font-size: 11px; letter-spacing: 2px; color: #aaa; margin-bottom: 2px; }
+        .hud-value { font-size: 32px; font-weight: 900; font-family: monospace; }
+        
+        .system-status {
+            position: absolute; bottom: 20px; right: 20px;
+            font-size: 10px; color: #00e5ff; text-align: right;
+        }
+
+        #loader {
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: #111; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 1000;
+        }
+        .loading-bar { width: 200px; height: 2px; background: #222; margin-top: 10px; position: relative; }
+        .loading-progress { width: 0%; height: 100%; background: #00e5ff; transition: width 0.3s; }
     </style>
 </head>
 <body>
+
+<div id="loader">
+    <div style="margin-bottom:10px">SCANNER SYSTEM READYING...</div>
+    <div class="loading-bar"><div id="progress" class="loading-progress"></div></div>
+</div>
+
+<div class="hud-panel">
+    <div class="hud-label">TOTAL COMPONENTS</div>
+    <div id="count-value" class="hud-value">000</div>
+</div>
+
+<div class="system-status">
+    AI ENGINE: COCO-SSD LITE<br>
+    MODE: SYMMETRY TRACKING ON
+</div>
 
 <div id="video-container">
     <video id="webcam" autoplay playsinline muted></video>
     <canvas id="overlay"></canvas>
 </div>
 
-<div class="ui-layer">
-    <div id="target-ui" class="target-info">TARGET LOCKED</div>
-</div>
-
 <script>
     const video = document.getElementById('webcam');
     const canvas = document.getElementById('overlay');
     const ctx = canvas.getContext('2d');
-    const targetUI = document.getElementById('target-ui');
+    const countDisplay = document.getElementById('count-value');
+    const progress = document.getElementById('progress');
 
     let model;
 
     async function init() {
-        model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: 'environment' }
-        });
-        video.srcObject = stream;
-        video.onloadedmetadata = () => {
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            detect();
-        };
+        try {
+            progress.style.width = "30%";
+            model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+            progress.style.width = "60%";
+            
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+            });
+            video.srcObject = stream;
+            video.onloadedmetadata = () => {
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                progress.style.width = "100%";
+                setTimeout(() => document.getElementById('loader').style.display = 'none', 500);
+                detect();
+            };
+        } catch (err) {
+            alert("Gagal mengakses kamera atau memuat model AI.");
+        }
     }
 
-    function drawCrosshair(x, y, size) {
-        ctx.strokeStyle = '#ff0000';
+    function drawPartCrosshair(x, y, size) {
+        // Lingkaran luar putus-putus
+        ctx.strokeStyle = '#00e5ff';
         ctx.lineWidth = 2;
-        
-        // Garis Horizontal
+        ctx.setLineDash([4, 4]);
         ctx.beginPath();
-        ctx.moveTo(x - size, y);
-        ctx.lineTo(x + size, y);
+        ctx.arc(x, y, size, 0, Math.PI * 2);
         ctx.stroke();
+        ctx.setLineDash([]);
 
-        // Garis Vertikal
+        // Titik pusat (Center Point)
+        ctx.fillStyle = '#ff3d00'; // Warna merah kontras untuk titik pusat
         ctx.beginPath();
-        ctx.moveTo(x, y - size);
-        ctx.lineTo(x, y + size);
-        ctx.stroke();
+        ctx.arc(x, y, 3, 0, Math.PI * 2);
+        ctx.fill();
 
-        // Lingkaran Tengah
-        ctx.beginPath();
-        ctx.arc(x, y, 10, 0, Math.PI * 2);
-        ctx.stroke();
+        // Label Koordinat
+        ctx.fillStyle = '#00e5ff';
+        ctx.font = "10px monospace";
+        ctx.fillText(`X:${Math.round(x)} Y:${Math.round(y)}`, x + size + 5, y);
     }
 
     async function detect() {
         const predictions = await model.detect(video);
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         
-        let targetFound = false;
+        let componentsFound = 0;
 
         predictions.forEach(p => {
             const [x, y, width, height] = p.bbox;
-            const centerX = x + (width / 2);
-            const centerY = y + (height / 2);
             const ratio = width / height;
+            const size = (width + height) / 2;
 
-            // Logika Deteksi Bentuk:
-            // 1. Cek rasio aspek (untuk Persegi/Lingkaran biasanya 0.8 - 1.2)
-            // 2. Filter kategori tertentu yang berbentuk bulat/kotak
-            const isSymmetrical = ratio > 0.8 && ratio < 1.2;
-            const targetClasses = ['sports ball', 'apple', 'orange', 'clock', 'bowl', 'cell phone', 'book'];
-
-            if (isSymmetrical || targetClasses.includes(p.class)) {
-                targetFound = true;
+            // KRITERIA KHUSUS KOMPONEN (MUR/BAUT/TUTUP BOTOL)
+            // 1. Rasio harus sangat dekat dengan lingkaran/persegi (0.8 - 1.25)
+            // 2. Kita menghitung objek kecil (size > 20 pixel) agar noise tidak terhitung
+            const isComponentShape = ratio > 0.8 && ratio < 1.25;
+            
+            if (isComponentShape && size > 20) {
+                componentsFound++;
                 
-                // Munculkan Crosshair di tengah objek
-                drawCrosshair(centerX, centerY, 40);
+                const centerX = x + (width / 2);
+                const centerY = y + (height / 2);
+                const radius = Math.max(width, height) / 2 + 10;
 
-                // Gambar Box Tipis sebagai feedback
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.5)';
-                ctx.setLineDash([5, 5]);
-                ctx.strokeRect(x, y, width, height);
-                ctx.setLineDash([]);
-                
-                // Label Target
-                ctx.fillStyle = '#ff0000';
-                ctx.font = 'bold 16px monospace';
-                ctx.fillText(`TRK_${p.class.toUpperCase()}`, x, y - 10);
+                drawPartCrosshair(centerX, centerY, radius);
             }
         });
 
-        targetUI.style.display = targetFound ? 'inline-block' : 'none';
+        countDisplay.innerText = componentsFound.toString().padStart(3, '0');
         requestAnimationFrame(detect);
     }
 
