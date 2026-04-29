@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Object Counting - Kamera Device</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background-color: #f0f2f5;
+            color: #333;
+        }
+        header {
+            background-color: #2c3e50;
+            color: white;
+            width: 100%;
+            padding: 1rem 0;
+            text-align: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .container {
+            position: relative;
+            margin: 20px;
+            max-width: 640px;
+            width: 90%;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+        }
+        video, canvas {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        .controls {
+            padding: 20px;
+            text-align: center;
+        }
+        .status {
+            margin-bottom: 10px;
+            font-weight: bold;
+            color: #e67e22;
+        }
+        .counter-badge {
+            background-color: #27ae60;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 50px;
+            font-size: 1.2rem;
+            display: inline-block;
+            margin-top: 10px;
+        }
+        .info {
+            font-size: 0.9rem;
+            color: #7f8c8d;
+            margin-top: 10px;
+            padding: 0 20px;
+        }
+        #loading-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(255,255,255,0.9);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div id="loading-overlay">
+    <div class="spinner"></div>
+    <p>Memuat Model AI...</p>
+</div>
+
+<header>
+    <h1>Object Counting Real-time</h1>
+</header>
+
+<div class="container">
+    <video id="webcam" autoplay playsinline muted></video>
+    <canvas id="overlay"></canvas>
+</div>
+
+<div class="controls">
+    <div id="status" class="status">Menginisialisasi Kamera...</div>
+    <div class="counter-badge">
+        Objek Terdeteksi: <span id="count">0</span>
+    </div>
+</div>
+
+<div class="info">
+    <p>Catatan: Aplikasi ini menggunakan model <strong>COCO-SSD</strong> (TensorFlow.js) untuk mendeteksi objek umum secara lokal di browser Anda tanpa mengirim data ke server.</p>
+</div>
+
+<!-- Load TensorFlow.js and COCO-SSD model -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+
+<script>
+    const video = document.getElementById('webcam');
+    const canvas = document.getElementById('overlay');
+    const countDisplay = document.getElementById('count');
+    const statusDisplay = document.getElementById('status');
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const ctx = canvas.getContext('2d');
+
+    let model;
+
+    // 1. Akses Kamera
+    async function setupCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'environment' }, // Gunakan kamera belakang jika ada
+                audio: false
+            });
+            video.srcObject = stream;
+            return new Promise((resolve) => {
+                video.onloadedmetadata = () => {
+                    resolve(video);
+                };
+            });
+        } catch (err) {
+            statusDisplay.innerText = "Error: Kamera tidak diizinkan atau tidak ditemukan.";
+            console.error(err);
+        }
+    }
+
+    // 2. Deteksi Objek
+    async function detectObjects() {
+        // Lakukan prediksi
+        const predictions = await model.detect(video);
+        
+        // Bersihkan canvas
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        // Update jumlah objek
+        countDisplay.innerText = predictions.length;
+
+        // Gambar kotak pembatas (Bounding Boxes)
+        predictions.forEach(prediction => {
+            const [x, y, width, height] = prediction.bbox;
+            
+            // Gambar kotak
+            ctx.strokeStyle = '#00FF00';
+            ctx.lineWidth = 3;
+            ctx.strokeRect(x, y, width, height);
+
+            // Label teks
+            ctx.fillStyle = '#00FF00';
+            ctx.font = '16px Arial';
+            ctx.fillText(
+                `${prediction.class} (${Math.round(prediction.score * 100)}%)`,
+                x, y > 10 ? y - 5 : 10
+            );
+        });
+
+        // Loop terus-menerus
+        requestAnimationFrame(detectObjects);
+    }
+
+    // 3. Inisialisasi Utama
+    async function init() {
+        try {
+            // Load Model
+            model = await cocoSsd.load();
+            loadingOverlay.style.display = 'none';
+            statusDisplay.innerText = "Model Siap! Mendeteksi...";
+
+            // Setup Kamera
+            await setupCamera();
+            
+            // Samakan ukuran canvas dengan video
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+
+            // Mulai Deteksi
+            detectObjects();
+        } catch (err) {
+            console.error("Gagal inisialisasi:", err);
+            statusDisplay.innerText = "Terjadi kesalahan saat memuat aplikasi.";
+        }
+    }
+
+    // Jalankan aplikasi
+    init();
+</script>
+
+</body>
+</html>
