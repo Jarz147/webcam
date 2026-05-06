@@ -3,27 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Pro Industrial Counter</title>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
+    <title>Scanner Objek Putih</title>
+    <script async src="https://docs.opencv.org/4.5.x/opencv.js" onload="onOpenCvReady();"></script>
     <style>
         body { 
             margin: 0; background: #000; color: #fff; 
-            font-family: 'Arial', sans-serif; overflow: hidden; 
+            font-family: sans-serif; overflow: hidden; 
         }
         #video-container { position: relative; width: 100vw; height: 100vh; }
         video, canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
         
-        /* HUD Style mirip gambar contoh */
-        .hud-bottom {
-            position: absolute; bottom: 0; left: 0; right: 0;
-            background: rgba(0, 0, 0, 0.8);
-            padding: 30px 20px; text-align: center;
-            border-top: 1px solid #444; z-index: 100;
+        /* HUD - Pojok Kiri Atas */
+        .hud-counter {
+            position: absolute; top: env(safe-area-inset-top, 20px); left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            border: 2px solid #ff3d00;
+            padding: 15px 25px; z-index: 100;
+            border-radius: 10px;
+            box-shadow: 0 0 15px rgba(255, 61, 0, 0.5);
         }
-        .counting-text { font-size: 14px; color: #aaa; letter-spacing: 2px; margin-bottom: 5px; }
-        .total-number { font-size: 60px; font-weight: bold; line-height: 1; }
-        
+        .hud-label { font-size: 11px; text-transform: uppercase; color: #ccc; }
+        .hud-value { font-size: 45px; font-weight: bold; font-family: monospace; color: #ff3d00; }
+
+        /* Loader */
         #loader {
             position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             background: #000; display: flex; flex-direction: column;
@@ -34,91 +36,126 @@
 <body>
 
 <div id="loader">
-    <div style="border:3px solid #333; border-top:3px solid #007bff; width:30px; height:30px; border-radius:50%; animation: spin 1s linear infinite;"></div>
-    <p style="margin-top:15px">BOOTING SYSTEM...</p>
+    <div style="border:3px solid #333; border-top:3px solid #ff3d00; width:30px; height:30px; border-radius:50%; animation: spin 1s linear infinite;"></div>
+    <p style="margin-top:15px; font-size: 11px; letter-spacing: 2px; color: #ff3d00">MEMUAT ALGORITMA CV...</p>
+</div>
+
+<div class="hud-counter">
+    <div class="hud-label">Symmetry Count</div>
+    <div id="count-value" class="hud-value">0</div>
 </div>
 
 <div id="video-container">
     <video id="webcam" autoplay playsinline muted></video>
     <canvas id="overlay"></canvas>
-</div>
-
-<div class="hud-bottom">
-    <div class="counting-text">COUNTING...</div>
-    <div id="count-value" class="total-number">0</div>
+    <canvas id="canvas_buffer" style="display:none;"></canvas>
 </div>
 
 <script>
     const video = document.getElementById('webcam');
-    const canvas = document.getElementById('overlay');
-    const ctx = canvas.getContext('2d');
+    const canvasOverlay = document.getElementById('overlay');
+    const canvasBuffer = document.getElementById('canvas_buffer');
+    const ctx = canvasOverlay.getContext('2d');
     const countDisplay = document.getElementById('count-value');
+    const loader = document.getElementById('loader');
 
-    let model;
+    let cvReady = false;
+    let streamReady = false;
 
-    async function init() {
-        try {
-            model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'environment', width: {ideal: 1280}, height: {ideal: 720} }
-            });
-            video.srcObject = stream;
-            video.onloadedmetadata = () => {
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
-                document.getElementById('loader').style.display = 'none';
-                detect();
-            };
-        } catch (err) { alert("Izin kamera diperlukan."); }
+    // 1. OpenCV.js dipanggil
+    function onOpenCvReady() {
+        cvReady = true;
+        checkAllReady();
     }
 
-    function drawNumberedMarker(x, y, id) {
-        // 1. Gambar Lingkaran Putih (Background angka)
-        ctx.fillStyle = 'rgba(0, 123, 255, 0.9)'; // Warna biru seperti di gambar
+    // 2. Setup Kamera
+    async function setupCamera() {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: 'environment', width: 640, height: 480 }
+        });
+        video.srcObject = stream;
+        video.onloadedmetadata = () => {
+            streamReady = true;
+            checkAllReady();
+        };
+    }
+
+    // 3. Pastikan semua system siap
+    function checkAllReady() {
+        if (cvReady && streamReady) {
+            // Sesuaikan ukuran semua canvas
+            canvasOverlay.width = canvasBuffer.width = video.videoWidth;
+            canvasOverlay.height = canvasBuffer.height = video.videoHeight;
+            loader.style.display = 'none';
+            // Jalankan deteksi
+            processVideo();
+        }
+    }
+
+    // 4. Penggambaran Marker
+    function drawCircleMarker(x, y, radius) {
+        ctx.strokeStyle = '#ff3d00';
+        ctx.lineWidth = 4;
         ctx.beginPath();
-        ctx.arc(x, y, 15, 0, Math.PI * 2);
-        ctx.fill();
-        
-        // 2. Gambar Outline Putih
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = 2;
+        ctx.arc(x, y, radius + 5, 0, Math.PI * 2); // Lingkaran luar
         ctx.stroke();
 
-        // 3. Gambar Nomor Urut
-        ctx.fillStyle = '#fff';
-        ctx.font = 'bold 14px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(id, x, y);
+        ctx.fillStyle = '#ff3d00'; // Titik pusat
+        ctx.beginPath();
+        ctx.arc(x, y, 4, 0, Math.PI * 2);
+        ctx.fill();
     }
 
-    async function detect() {
-        const predictions = await model.detect(video);
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    // 5. INTI ALGORITMA (Computer Vision Klasik)
+    function processVideo() {
+        // Ambil data frame dari video
+        const ctxBuffer = canvasBuffer.getContext('2d');
+        ctxBuffer.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
         
-        let validCount = 0;
+        let src = cv.imread(canvasBuffer);
+        let gray = new cv.Mat();
+        let circles = new cv.Mat();
 
-        predictions.forEach((p, index) => {
-            const [x, y, width, height] = p.bbox;
-            const ratio = width / height;
+        // Step 1: Ubah ke skala keabu-abuan (Gray Scale)
+        cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
 
-            // Filter benda yang bentuknya proporsional (mur, baut, tutup botol)
-            if (ratio > 0.6 && ratio < 1.4) {
-                validCount++;
-                
-                const centerX = x + (width / 2);
-                const centerY = y + (height / 2);
+        // Step 2: Algoritma Hough Transform untuk mencari Lingkaran
+        // Kita sesuaikan parameter untuk mendeteksi objek putih yang samar
+        try {
+            cv.HoughCircles(gray, circles, cv.HOUGH_GRADIENT, 
+                1.5, // Akurasi akumulator (lebih tinggi = lebih sensitif)
+                120, // Jarak minimum antar lingkaran (menghindari duplikasi)
+                80,  // Batas atas deteksi tepi
+                40,  // Batas akumulator untuk lingkaran (lebih rendah = lebih sensitif)
+                10,  // Radius minimum objek (menghindari noise)
+                200  // Radius maksimum objek
+            );
+        } catch (e) { console.error("Hough Error:", e); }
 
-                // Gambar penomoran otomatis
-                drawNumberedMarker(centerX, centerY, validCount);
-            }
-        });
+        // Step 3: Gambar hasil ke layar
+        ctx.clearRect(0, 0, canvasOverlay.width, canvasOverlay.height);
+        let count = 0;
 
-        countDisplay.innerText = validCount;
-        requestAnimationFrame(detect);
+        for (let i = 0; i < circles.cols; ++i) {
+            let x = circles.data32F[i * 3];
+            let y = circles.data32F[i * 3 + 1];
+            let radius = circles.data32F[i * 3 + 2];
+
+            count++;
+            drawCircleMarker(x, y, radius);
+        }
+
+        // Step 4: Update HUD
+        countDisplay.innerText = count;
+
+        // Step 5: Cleanup Memori agar HP tidak nge-lag
+        src.delete(); gray.delete(); circles.delete();
+
+        // Loop terus-menerus
+        requestAnimationFrame(processVideo);
     }
 
-    init();
+    setupCamera();
 </script>
 
 <style>
