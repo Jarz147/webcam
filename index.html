@@ -3,53 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Universal Object Counter</title>
+    <title>Pro Industrial Counter</title>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
     <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd"></script>
     <style>
         body { 
             margin: 0; background: #000; color: #fff; 
-            font-family: sans-serif; overflow: hidden; 
+            font-family: 'Arial', sans-serif; overflow: hidden; 
         }
         #video-container { position: relative; width: 100vw; height: 100vh; }
         video, canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; }
         
-        /* HUD - Pojok Layar */
-        .hud-counter {
-            position: absolute; top: env(safe-area-inset-top, 20px); left: 20px;
-            background: rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            border-left: 5px solid #ff3d00;
-            padding: 15px 25px; z-index: 100;
-            border-radius: 0 10px 10px 0;
+        /* HUD Style mirip gambar contoh */
+        .hud-bottom {
+            position: absolute; bottom: 0; left: 0; right: 0;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 30px 20px; text-align: center;
+            border-top: 1px solid #444; z-index: 100;
         }
-        .hud-label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #ccc; }
-        .hud-value { font-size: 40px; font-weight: bold; font-family: monospace; }
-
-        /* Loader */
+        .counting-text { font-size: 14px; color: #aaa; letter-spacing: 2px; margin-bottom: 5px; }
+        .total-number { font-size: 60px; font-weight: bold; line-height: 1; }
+        
         #loader {
             position: fixed; top: 0; left: 0; right: 0; bottom: 0;
             background: #000; display: flex; flex-direction: column;
             justify-content: center; align-items: center; z-index: 1000;
         }
-        .spinner {
-            width: 40px; height: 40px; border: 3px solid #333;
-            border-top: 3px solid #ff3d00; border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-        }
-        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
 
 <div id="loader">
-    <div class="spinner"></div>
-    <p style="margin-top:15px; font-size: 12px; letter-spacing: 2px;">LOADING AI ENGINE...</p>
-</div>
-
-<div class="hud-counter">
-    <div class="hud-label">Object Count</div>
-    <div id="count-value" class="hud-value">0</div>
+    <div style="border:3px solid #333; border-top:3px solid #007bff; width:30px; height:30px; border-radius:50%; animation: spin 1s linear infinite;"></div>
+    <p style="margin-top:15px">BOOTING SYSTEM...</p>
 </div>
 
 <div id="video-container">
@@ -57,86 +43,86 @@
     <canvas id="overlay"></canvas>
 </div>
 
+<div class="hud-bottom">
+    <div class="counting-text">COUNTING...</div>
+    <div id="count-value" class="total-number">0</div>
+</div>
+
 <script>
     const video = document.getElementById('webcam');
     const canvas = document.getElementById('overlay');
     const ctx = canvas.getContext('2d');
     const countDisplay = document.getElementById('count-value');
-    const loader = document.getElementById('loader');
 
     let model;
 
     async function init() {
         try {
-            // Memuat model Lite agar lancar di HP
             model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-            
             const stream = await navigator.mediaDevices.getUserMedia({
-                video: { 
-                    facingMode: 'environment', 
-                    width: { ideal: 1280 }, 
-                    height: { ideal: 720 } 
-                }
+                video: { facingMode: 'environment', width: {ideal: 1280}, height: {ideal: 720} }
             });
-            
             video.srcObject = stream;
             video.onloadedmetadata = () => {
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
-                loader.style.display = 'none';
+                document.getElementById('loader').style.display = 'none';
                 detect();
             };
-        } catch (err) {
-            alert("Sistem membutuhkan izin kamera.");
-        }
+        } catch (err) { alert("Izin kamera diperlukan."); }
     }
 
-    function drawTarget(x, y, size) {
-        // Lingkaran Crosshair
-        ctx.strokeStyle = '#ff3d00';
-        ctx.lineWidth = 3;
+    function drawNumberedMarker(x, y, id) {
+        // 1. Gambar Lingkaran Putih (Background angka)
+        ctx.fillStyle = 'rgba(0, 123, 255, 0.9)'; // Warna biru seperti di gambar
         ctx.beginPath();
-        ctx.arc(x, y, size * 0.8, 0, Math.PI * 2);
+        ctx.arc(x, y, 15, 0, Math.PI * 2);
+        ctx.fill();
+        
+        // 2. Gambar Outline Putih
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth = 2;
         ctx.stroke();
 
-        // Titik Tengah
-        ctx.fillStyle = '#ff3d00';
-        ctx.beginPath();
-        ctx.arc(x, y, 4, 0, Math.PI * 2);
-        ctx.fill();
+        // 3. Gambar Nomor Urut
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 14px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(id, x, y);
     }
 
     async function detect() {
-        // Ambil semua prediksi objek
         const predictions = await model.detect(video);
-        
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        let count = 0;
+        
+        let validCount = 0;
 
-        predictions.forEach(p => {
+        predictions.forEach((p, index) => {
             const [x, y, width, height] = p.bbox;
             const ratio = width / height;
 
-            // Filter Simetri: Mengunci objek yang bentuknya mendekati bulat/kotak
-            // Berguna untuk mur, baut, dan tutup botol
-            if (ratio > 0.7 && ratio < 1.3) {
-                count++;
+            // Filter benda yang bentuknya proporsional (mur, baut, tutup botol)
+            if (ratio > 0.6 && ratio < 1.4) {
+                validCount++;
                 
                 const centerX = x + (width / 2);
                 const centerY = y + (height / 2);
-                const targetSize = (width + height) / 4;
 
-                drawTarget(centerX, centerY, targetSize);
+                // Gambar penomoran otomatis
+                drawNumberedMarker(centerX, centerY, validCount);
             }
         });
 
-        // Update nilai di pojok layar
-        countDisplay.innerText = count;
-
+        countDisplay.innerText = validCount;
         requestAnimationFrame(detect);
     }
 
     init();
 </script>
+
+<style>
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+</style>
 </body>
 </html>
